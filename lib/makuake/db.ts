@@ -17,6 +17,10 @@ const DATABASE_PATH = join(process.cwd(), ".codex-app-server", "makuake-scout.sq
 const DEFAULT_SOURCE_URL = "https://www.makuake.com/discover/coming-soon";
 const SCORING_VERSION = "2026-05-13.2";
 const DAILY_FETCH_LIMIT = 2;
+const PUBLIC_DEMO_MODE =
+  process.env.MAKUAKE_SCOUT_DEMO_MODE === "1" || process.env.VERCEL === "1";
+const PUBLIC_DEMO_MESSAGE =
+  "公開デモ環境ではMakuakeへアクセスせず、デモデータと一時保存で動作します。ローカルのCodex App ServerではSQLiteキャッシュと取得機能を利用できます。";
 
 type ProjectRow = {
   id: string;
@@ -78,8 +82,25 @@ type LearningSignal = {
 };
 
 let initialized = false;
+let demoStore:
+  | {
+      projects: MakuakeProject[];
+      generatedShort: GeneratedShortPackage | null;
+      selectionExamples: LearningSignal[];
+      metadata: Map<string, string>;
+    }
+  | null = null;
+
+export function isPublicDemoMode() {
+  return PUBLIC_DEMO_MODE;
+}
 
 export function ensureDatabase() {
+  if (PUBLIC_DEMO_MODE) {
+    ensureDemoStore();
+    return;
+  }
+
   if (initialized) {
     return;
   }
@@ -179,6 +200,10 @@ export function ensureDatabase() {
 }
 
 export function getScoutState(): ScoutState {
+  if (PUBLIC_DEMO_MODE) {
+    return getDemoScoutState();
+  }
+
   ensureDatabase();
   purgeInvalidProjects();
   purgeSeedProjectsWhenRealDataExists();
@@ -202,6 +227,10 @@ export function getScoutState(): ScoutState {
 }
 
 export function getProjects() {
+  if (PUBLIC_DEMO_MODE) {
+    return getDemoProjects();
+  }
+
   ensureDatabase();
 
   const projects = querySql<ProjectRow>(
@@ -214,6 +243,14 @@ export function getProjects() {
 }
 
 export function getProjectsByIds(ids: string[]) {
+  if (PUBLIC_DEMO_MODE) {
+    const projectMap = new Map(getDemoProjects().map((project) => [project.id, project]));
+
+    return ids
+      .map((id) => projectMap.get(id))
+      .filter((project): project is MakuakeProject => Boolean(project));
+  }
+
   ensureDatabase();
 
   if (ids.length === 0) {
@@ -229,6 +266,23 @@ export function getProjectsByIds(ids: string[]) {
 }
 
 export function upsertProjects(projects: MakuakeProject[]) {
+  if (PUBLIC_DEMO_MODE) {
+    const store = ensureDemoStore();
+    const projectMap = new Map(store.projects.map((project) => [project.id, project]));
+
+    for (const project of projects) {
+      projectMap.set(project.id, {
+        ...cloneProject(project),
+        saved: projectMap.get(project.id)?.saved ?? project.saved,
+        note: projectMap.get(project.id)?.note ?? project.note,
+        userFeedback: projectMap.get(project.id)?.userFeedback ?? project.userFeedback
+      });
+    }
+
+    store.projects = Array.from(projectMap.values());
+    return;
+  }
+
   ensureDatabase();
 
   if (projects.length === 0) {
@@ -326,6 +380,24 @@ export function updateProjectNote(
   saved: boolean,
   userFeedback?: UserFeedback
 ) {
+  if (PUBLIC_DEMO_MODE) {
+    const store = ensureDemoStore();
+
+    store.projects = store.projects.map((project) =>
+      project.id === projectId
+        ? {
+            ...project,
+            note,
+            saved,
+            userFeedback: userFeedback === undefined ? project.userFeedback : userFeedback,
+            updatedAt: new Date().toISOString()
+          }
+        : project
+    );
+
+    return getDemoScoutState();
+  }
+
   ensureDatabase();
   const feedbackUpdate =
     userFeedback === undefined
@@ -345,6 +417,62 @@ export function updateProjectNote(
 }
 
 export function importSelectedProjectUrls(urls: string[]) {
+  if (PUBLIC_DEMO_MODE) {
+    const store = ensureDemoStore();
+    const normalizedUrls = Array.from(
+      new Set(urls.map(normalizeProjectUrl).filter((url): url is string => Boolean(url)))
+    );
+    const now = new Date().toISOString();
+    let matched = 0;
+    let storedExamples = 0;
+
+    for (const url of normalizedUrls) {
+      const project = store.projects.find(
+        (candidate) => normalizeProjectUrl(candidate.sourceUrl) === url
+      );
+
+      if (project) {
+        project.saved = true;
+        project.userFeedback = "selected";
+        project.updatedAt = now;
+        matched += 1;
+        continue;
+      }
+
+      const example = buildSelectionExampleFromUrl(url);
+      const existingIndex = store.selectionExamples.findIndex(
+        (candidate) => candidate.strength === "url" && candidate.keywords.join("|") === example.keywords.join("|")
+      );
+      const signal: LearningSignal = {
+        category: example.category,
+        keywords: example.keywords,
+        userFeedback: "selected",
+        saved: true,
+        strength: "url"
+      };
+
+      if (existingIndex >= 0) {
+        store.selectionExamples[existingIndex] = signal;
+      } else {
+        store.selectionExamples.push(signal);
+      }
+
+      storedExamples += 1;
+    }
+
+    store.metadata.set(
+      "fetch_message",
+      `公開デモの一時学習として、選抜URL${normalizedUrls.length}件を反映しました。`
+    );
+
+    return {
+      state: getDemoScoutState(),
+      imported: normalizedUrls.length,
+      matched,
+      storedExamples
+    };
+  }
+
   ensureDatabase();
 
   const normalizedUrls = Array.from(
@@ -426,6 +554,13 @@ export function importSelectedProjectUrls(urls: string[]) {
 }
 
 export function saveGeneratedShort(packageData: GeneratedShortPackage) {
+  if (PUBLIC_DEMO_MODE) {
+    const store = ensureDemoStore();
+
+    store.generatedShort = packageData;
+    return getDemoScoutState();
+  }
+
   ensureDatabase();
   const now = new Date().toISOString();
 
@@ -463,6 +598,10 @@ export function generateShortForProjects(projectIds: string[]) {
 }
 
 export function getMetadata(key: string) {
+  if (PUBLIC_DEMO_MODE) {
+    return ensureDemoStore().metadata.get(key) ?? "";
+  }
+
   ensureDatabase();
   const [row] = querySql<MetadataRow>(
     `SELECT key, value FROM metadata WHERE key = ${sqlString(key)} LIMIT 1;`
@@ -472,6 +611,11 @@ export function getMetadata(key: string) {
 }
 
 export function setMetadata(key: string, value: string) {
+  if (PUBLIC_DEMO_MODE) {
+    ensureDemoStore().metadata.set(key, value);
+    return;
+  }
+
   executeSql(`
     INSERT INTO metadata (key, value)
     VALUES (${sqlString(key)}, ${sqlString(value)})
@@ -480,6 +624,10 @@ export function setMetadata(key: string, value: string) {
 }
 
 export function writeFetchLog(status: string, projectCount: number, message: string) {
+  if (PUBLIC_DEMO_MODE) {
+    return;
+  }
+
   executeSql(`
     INSERT INTO fetch_logs (fetched_at, source_url, project_count, status, message)
     VALUES (
@@ -493,6 +641,17 @@ export function writeFetchLog(status: string, projectCount: number, message: str
 }
 
 export function markFetchCompleted(projectCount: number, message: string) {
+  if (PUBLIC_DEMO_MODE) {
+    const now = new Date().toISOString();
+    const todayKey = getTokyoDateKey(new Date(now));
+    const store = ensureDemoStore();
+
+    store.metadata.set("last_fetch_at", now);
+    store.metadata.set("last_fetch_date", todayKey);
+    store.metadata.set("fetch_message", message);
+    return;
+  }
+
   const now = new Date().toISOString();
   const todayKey = getTokyoDateKey(new Date(now));
   const fetchStatus = getDailyFetchStatus(todayKey);
@@ -507,6 +666,16 @@ export function markFetchCompleted(projectCount: number, message: string) {
 }
 
 export function getDailyFetchStatus(todayKey = getTokyoDateKey()) {
+  if (PUBLIC_DEMO_MODE) {
+    return {
+      fetchesToday: 0,
+      dailyFetchLimit: 0,
+      remainingFetchesToday: 0,
+      canFetchToday: false,
+      todayKey
+    };
+  }
+
   const dailyFetchDate = getMetadata("daily_fetch_date");
   const dailyFetchCount = Number(getMetadata("daily_fetch_count") || "0");
   const lastFetchDate = getMetadata("last_fetch_date");
@@ -528,6 +697,10 @@ export function getDailyFetchStatus(todayKey = getTokyoDateKey()) {
 }
 
 export function getSourceUrl() {
+  if (PUBLIC_DEMO_MODE) {
+    return DEFAULT_SOURCE_URL;
+  }
+
   return process.env.MAKUAKE_COMING_SOON_URL || getMetadata("source_url") || DEFAULT_SOURCE_URL;
 }
 
@@ -543,6 +716,86 @@ export function getTokyoDateKey(date = new Date()) {
   const day = parts.find((part) => part.type === "day")?.value ?? "01";
 
   return `${year}-${month}-${day}`;
+}
+
+function ensureDemoStore() {
+  if (demoStore) {
+    return demoStore;
+  }
+
+  const now = new Date().toISOString();
+  const todayKey = getTokyoDateKey(new Date(now));
+
+  demoStore = {
+    projects: scoutSeedProjects.map(normalizeProject),
+    generatedShort: null,
+    selectionExamples: [],
+    metadata: new Map([
+      ["seeded_at", now],
+      ["last_fetch_at", ""],
+      ["last_fetch_date", ""],
+      ["fetch_message", PUBLIC_DEMO_MESSAGE],
+      ["scoring_version", SCORING_VERSION],
+      ["demo_today_key", todayKey]
+    ])
+  };
+
+  return demoStore;
+}
+
+function getDemoScoutState(): ScoutState {
+  const store = ensureDemoStore();
+  const projects = getDemoProjects();
+  const weeklyTop = selectWeeklyProjects(projects);
+  const manualTop = selectManualTopProjects(projects);
+  const savedProjects = projects.filter((project) => project.saved);
+
+  return {
+    projects,
+    weeklyTop,
+    manualTop,
+    manualSelectionUrls: [],
+    savedProjects,
+    generatedShort: store.generatedShort ? { ...store.generatedShort } : null,
+    meta: getDemoScoutMeta()
+  };
+}
+
+function getDemoProjects() {
+  const store = ensureDemoStore();
+
+  return applyLearningToProjects(
+    store.projects.map(cloneProject),
+    store.selectionExamples
+  ).sort((a, b) => b.score - a.score || b.fit.shorts - a.fit.shorts);
+}
+
+function getDemoScoutMeta(): ScoutMeta {
+  const todayKey = getTokyoDateKey();
+
+  return {
+    sourceUrl: DEFAULT_SOURCE_URL,
+    lastFetchedAt: "",
+    lastFetchDate: "",
+    canFetchToday: false,
+    fetchesToday: 0,
+    dailyFetchLimit: 0,
+    remainingFetchesToday: 0,
+    todayKey,
+    nextAllowedAt: "公開デモでは取得不可",
+    accessPolicy:
+      "公開デモではMakuakeへアクセスしません。ローカルのCodex App Serverでは1日2回まで取得し、SQLiteへキャッシュ保存します。",
+    fetchMessage: ensureDemoStore().metadata.get("fetch_message") ?? PUBLIC_DEMO_MESSAGE
+  };
+}
+
+function cloneProject(project: MakuakeProject): MakuakeProject {
+  return {
+    ...project,
+    keywords: [...project.keywords],
+    scoreBreakdown: { ...project.scoreBreakdown },
+    fit: { ...project.fit }
+  };
 }
 
 function getScoutMeta(): ScoutMeta {

@@ -103,6 +103,7 @@ export function MakuakeScoutApp({ initialState }: { initialState: ScoutState }) 
       project.category !== "ファッション" &&
       project.category !== "体験"
   ).length;
+  const isPublicDemo = state.meta.dailyFetchLimit === 0;
 
   useEffect(() => {
     setIsApproved(false);
@@ -110,7 +111,11 @@ export function MakuakeScoutApp({ initialState }: { initialState: ScoutState }) 
 
   async function handleRefresh() {
     if (!state.meta.canFetchToday) {
-      setStatus("本日は2回取得済みです。次回取得可能時刻までキャッシュを使います。");
+      setStatus(
+        isPublicDemo
+          ? "公開デモではMakuakeへアクセスしません。ローカルのCodex App Serverで取得機能を利用してください。"
+          : "本日は2回取得済みです。次回取得可能時刻までキャッシュを使います。"
+      );
       return;
     }
 
@@ -159,7 +164,13 @@ export function MakuakeScoutApp({ initialState }: { initialState: ScoutState }) 
     note: string,
     userFeedback?: UserFeedback
   ) {
-    setStatus(userFeedback ? "選抜フィードバックを学習中です..." : "候補メモをSQLiteへ保存中です...");
+    setStatus(
+      userFeedback
+        ? "選抜フィードバックを学習中です..."
+        : isPublicDemo
+          ? "候補メモを公開デモの一時保存へ反映中です..."
+          : "候補メモをSQLiteへ保存中です..."
+    );
 
     try {
       const response = await fetch("/api/scout/project", {
@@ -224,7 +235,11 @@ export function MakuakeScoutApp({ initialState }: { initialState: ScoutState }) 
       }
 
       setState(data);
-      setStatus("ショート動画用の台本セットを生成し、SQLiteへ保存しました。");
+      setStatus(
+        isPublicDemo
+          ? "ショート動画用の台本セットを生成し、公開デモの一時保存へ反映しました。"
+          : "ショート動画用の台本セットを生成し、SQLiteへ保存しました。"
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "生成に失敗しました。");
     } finally {

@@ -4,6 +4,7 @@ import {
   getSourceUrl,
   getTokyoDateKey,
   getDailyFetchStatus,
+  isPublicDemoMode,
   markFetchCompleted,
   setMetadata,
   upsertProjects,
@@ -14,6 +15,15 @@ import { scrapeComingSoonProjects } from "@/lib/makuake/scraper";
 import type { RefreshResult } from "@/lib/makuake/types";
 
 export async function refreshComingSoonProjects(): Promise<RefreshResult> {
+  if (isPublicDemoMode()) {
+    return {
+      state: getScoutState(),
+      refreshed: false,
+      message:
+        "公開デモ環境ではMakuakeへアクセスしません。ローカルのCodex App Serverで取得機能を利用してください。"
+    };
+  }
+
   const todayKey = getTokyoDateKey();
   const fetchStatus = getDailyFetchStatus(todayKey);
 
