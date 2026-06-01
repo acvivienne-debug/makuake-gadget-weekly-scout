@@ -36,7 +36,7 @@ GitHub ユーザー名:
 GitHub リポジトリ URL:
 
 ```text
-https://github.com/[user-or-org]/makuake-gadget-weekly-scout
+https://github.com/acvivienne-debug/makuake-gadget-weekly-scout
 ```
 
 役割:
@@ -93,4 +93,3 @@ APIクレジットは、選抜理由・ナレーション台本・YouTube Shorts
 - [ ] `npm run build` passes.
 - [ ] Screenshots or a demo video are added to the repository.
 - [ ] GitHub stars, usage numbers, or ecosystem importance are added when available.
-
