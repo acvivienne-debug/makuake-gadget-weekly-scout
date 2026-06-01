@@ -1,0 +1,20 @@
+.next/
+.next.stale-*/
+node_modules/
+out/
+dist/
+*.log
+.env*
+!.env.example
+gcs-*.png
+makuake-scout-*.png
+.codex-app-server/
+.DS_Store
+tsconfig.tsbuildinfo
+makuake-error-check.png
+makuake-nav-check.png
+
+# Local experiments and unrelated workspace archives
+archives/
+codex-pet-limit-rings/
+makuake-motion/
